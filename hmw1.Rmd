@@ -33,11 +33,14 @@ yfit<-dpois(pl$match_hometeam_score,mean(pl$match_hometeam_score))
 yfit<-yfit*nrow(pl)
 ggplot(pl,aes(x=match_hometeam_score))+geom_histogram()+ylab("Number of Games")+xlab("home_score")+geom_line(aes(y=yfit),color="blue")
 
+## It can be seen that occurunce of home goals looks like Poisson distrubiton
+
 ### Away Goals
 yfit_away<-dpois(pl$match_hometeam_score,mean(pl$match_hometeam_score))
 yfit_away<-yfit_away*nrow(pl)
-ggplot(pl,aes(x=match_hometeam_score))+geom_histogram()+ylab("Number of Games")+xlab("home_score")+geom_line(aes(y=yfit_away),color="blue")
+ggplot(pl,aes(x=match_hometeam_score))+geom_histogram()+ylab("Number of Games")+xlab("away_score")+geom_line(aes(y=yfit_away),color="blue")
 
+## It can be seen that occurunce of away goals looks like Poisson distrubiton
 
 ###### Task 2
 pl_bets<-subset(bets1,bets1$match_id%in%pl$match_id) ## only PL games
@@ -45,16 +48,17 @@ pl_betters<-unique(pl_bets$odd_bookmakers)
 selected_bookmakers<-pl_betters[1:4] ## select 4 gook makers
 pl_bets<-pl_bets%>%filter(odd_bookmakers%in%selected_bookmakers&variable%in%c("odd_1","odd_x","odd_2")&odd_epoch==lastBetEpoch) ## only latest bets included
 
+
 ## Task 2 Part 1
 pl_bets$classical_prob=1/pl_bets$value
 ## Task 2 Part 2
 pl_bets1<-pl_bets%>%group_by(match_id,odd_bookmakers)%>%mutate(normalProb=(1/value)/sum(1/value))
-## Task 2 Part 3
+## Task 2 Part 3 - 4
 for(i in 1:4){  
-  set1<-subset(pl_bets,pl_bets$odd_bookmakers==pl_betters[i])
+  set1<-subset(pl_bets,pl_bets$odd_bookmakers==selected_bookmakers[i])
   set1<-set1%>%arrange(match_id,variable)
-  set1<-set1%>%group_by(match_id)%>%mutate(predictor=first(classical_prob)-nth(classical_prob,2))## calculates p(home win)-p(away win)
-  draws_probs<-subset(set1,set1$variable=="odd_x") ## only draws
+  set1<-set1%>%group_by(match_id)%>%mutate(predictor=first(classical_prob)-nth(classical_prob,2))## calculates p(home win)-p(away win) for a given match, predictor is same for all of x,0,1 rows.
+  draws_probs<-subset(set1,set1$variable=="odd_x") ## only draw rows are enough, data become unique
   draws_probs$bin=ceiling((draws_probs$predictor+1)/0.2) ## bins created for 0.2 intervals in  -1 & +1
   draws_probs<-merge(draws_probs,matches%>%select(match_id,match_hometeam_score,match_awayteam_score),by="match_id",all.x=T)  
   draws_probs$results=""
@@ -66,16 +70,19 @@ for(i in 1:4){
   p<-ggplot(draws_probs,aes(x=predictor,shape=draws_probs$bin))+geom_point(aes(y=classical_prob))+geom_point(aes(y=actual_prob,),col="blue")+ scale_shape_identity()+xlab("P(home win) – P(away win)")+ylab("P(1/odd)")+ggtitle(pl_betters[i])
   plot(p)
 } 
-## Task 2 Part 4
+## Task 3
 
 #### Matches having 90+ goals and first 30 minutes red cards removed
 
+
 early_reds<-subset(booking,as.numeric(as.character(booking$time))<=30&booking$card=="red card")
 late_goals<-subset(goals,grepl("90+",goals$time))
+### games with 90+ goals and first 30 minutes red cards will be removed
 remaining_bets<-subset(pl_bets,!pl_bets$match_id%in%early_reds$match_id&!pl_bets$match_id%in%late_goals$match_id)
-count=length(setdiff(pl_bets$match_id,remaining_bets$match_id))
+count=length(setdiff(pl_bets$match_id,remaining_bets$match_id))## number of removed games
+i=1
 for(i in 1:4){
-set3<-subset(remaining_bets,pl_bets$odd_bookmakers==pl_betters[i])
+set3<-subset(remaining_bets,remaining_bets$odd_bookmakers==pl_betters[i])
   
   set3<-set3%>%arrange(match_id,variable)
   set3<-set3%>%group_by(match_id)%>%mutate(predictor=first(classical_prob)-nth(classical_prob,2))
