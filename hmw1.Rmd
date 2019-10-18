@@ -11,6 +11,7 @@ library(data.table)
 library(lubridate)
 library(dplyr)
 library(ggplot2)
+
 setwd("C:/Users/Ertu/Desktop/hmw1")
 temp = list.files(pattern="*.csv")
 files<-lapply(temp,fread,encoding="UTF-8")
