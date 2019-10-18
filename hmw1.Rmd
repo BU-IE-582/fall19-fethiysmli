@@ -101,7 +101,7 @@ set3<-subset(remaining_bets,remaining_bets$odd_bookmakers==pl_betters[i])
   draws_probs_new2[draws_probs_new2$match_hometeam_score<draws_probs_new2$match_awayteam_score,"results"]="away_win"
   bin_probs_new2<-draws_probs_new2%>%group_by(bin)%>%summarise(actual_prob=length(results[results=="tie"])/n())
   draws_probs_new2<-merge(draws_probs_new2,bin_probs_new2,by="bin")
-   p<-ggplot(draws_probs_new2,aes(x=predictor,shape=draws_probs_new2$bin))+geom_point(aes(y=classical_prob))+geom_point(aes(y=actual_prob,),col="blue")+ scale_shape_identity() +xlab("P(home win) – P(away win win)")+ylab("P(1/odd)")+ggtitle(paste(pl_betters[i],"-",count,"match removed",sep=" "))
+   p<-ggplot(draws_probs_new2,aes(x=predictor,shape=draws_probs_new2$bin))+geom_point(aes(y=classical_prob))+geom_point(aes(y=actual_prob,),col="blue")+ scale_shape_identity() +xlab("P(home win) – P(away win win)")+ylab("P(1/odd)")+ggtitle(paste(pl_betters[i],"-",count,"matches removed",sep=" "))
   plot(p)
 }
 
