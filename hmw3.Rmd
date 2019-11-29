@@ -1,0 +1,112 @@
+---
+title: "IE-582-Hmw3"
+author: "Fethi Yılmazşamlı"
+date: "29 11 2019"
+output: html_document
+---
+
+```{r}
+library(data.table)
+library(glmnet)
+library(dplyr)
+library(ggplot2)
+setwd("Z:/codes/R-Scripts")
+csp<-fread("consumption.csv",sep=";",header = T)
+csp$Tarih<-as.Date(csp$Tarih,"%Y-%m-%d")
+csp$Saat<-as.numeric(gsub(":.*","",csp$Saat))
+csp<-subset(csp,csp$Tarih<as.Date("2019-11-24","%Y-%m-%d"))
+csp<-csp%>%mutate(naive_predict_168=shift(csp$`Tüketim Miktarı (MWh)`,168),naive_predict_48=shift(csp$`Tüketim Miktarı (MWh)`,48))
+test<-subset(csp,csp$Tarih>=as.Date("2019-11-01","%Y-%m-%d")&csp$Tarih<as.Date("2019-11-24","%Y-%m-%d"))
+#Part-a
+library(yardstick)
+mape_168<-mape(test,test$`Tüketim Miktarı (MWh)`,test$naive_predict_168)
+mape_48<-mape(test,test$`Tüketim Miktarı (MWh)`,test$naive_predict_48)
+summary(mape_168)
+summary(mape_48)
+
+#Part-b
+train<-subset(csp,csp$Tarih>=as.Date(   "2016-01-08","%Y-%m-%d"  ) & csp$Tarih<as.Date("2019-11-01","%Y-%m-%d"))
+lmodel<-lm(`Tüketim Miktarı (MWh)`~ naive_predict_168 + naive_predict_48,train)
+pred<-predict(lmodel,test)
+test$lm_predict=pred
+linear_mape=mape(test,test$`Tüketim Miktarı (MWh)`,test$lm_predict)
+summary(linear_mape)
+#Part-c
+
+i=1
+new_test_results<-data.frame()
+for(i in 1:24){
+  hourly_train<-subset(train,train$Saat==i-1)
+  model_temp<-lm(`Tüketim Miktarı (MWh)`~ naive_predict_168 + naive_predict_48,hourly_train)
+  temp_test<-subset(test,test$Saat==i-1)
+  pred_hourly<-predict(model_temp,temp_test%>%select(naive_predict_168,naive_predict_48))
+  temp_test$lm_predict_hourly=pred_hourly
+  new_test_results<-rbind(new_test_results,temp_test)  
+}
+
+new_test_results<-new_test_results%>%arrange(Tarih,Saat)
+mape_lm_hourly<-mape(new_test_results,new_test_results$`Tüketim Miktarı (MWh)`,new_test_results$lm_predict_hourly)
+summary(mape_lm_hourly)
+#Part-d
+i=8
+data_wide=csp
+data_wide[,6:53]=0
+dates=unique(data_wide$Tarih)
+for(i in 8:length(dates)){
+  last_48=subset(csp,csp$Tarih==dates[i]-2)
+  last_48<-as.data.frame(matrix(last_48$`Tüketim Miktarı (MWh)`,ncol = 24))
+  last_168=subset(csp,csp$Tarih==dates[i]-7)
+  last_168<-as.data.frame(matrix(last_168$`Tüketim Miktarı (MWh)`,ncol = 24))
+  if(nrow(last_48)>0&nrow(last_168)>0){
+    data_wide[data_wide$Tarih==dates[i],6:29]=last_48
+    data_wide[data_wide$Tarih==dates[i],30:53]=last_168
+  }
+  if(nrow(last_48)==0)
+    show(dates[i]-2)
+}
+
+train<-subset(data_wide,data_wide$Tarih>=dates[8]&data_wide$Tarih<as.Date("2019-11-01","%Y-%m-%d"))
+test<-subset(data_wide,data_wide$Tarih>=as.Date("2019-11-01","%Y-%m-%d"))
+
+matrix=as.matrix(train[,6:53])
+result<-matrix(train[,3])
+glm_fit<-cv.glmnet(matrix,result)
+glm_predict<-predict(glm_fit, as.matrix(test[,6:53]), s = glm_fit$lambda.1se)  # make predictions
+
+new_test_results_glm<-data.frame()
+all_coefs<-data.frame()
+for(i in 1:24){
+  set.seed(i)
+  hourly_train<-subset(train,train$Saat==i-1)
+  matrix=as.matrix(hourly_train[,6:53])
+  result<-matrix(hourly_train[,3])
+  glm_fit_temp<-cv.glmnet(matrix,result)
+  temp_test<-subset(test,test$Saat==i-1)
+  pred_hourly<-predict(glm_fit_temp,as.matrix(temp_test[,6:53]),s=glm_fit_temp$lambda.1se)
+  temp_test$glm_predict_hourly=as.vector(pred_hourly)
+  new_test_results_glm<-rbind(new_test_results_glm,temp_test) 
+  
+  coefs<-coef(glm_fit_temp,s=glm_fit_temp$lambda.1se)
+  coefs<-as.data.frame(t(coefs[1:49]))
+  all_coefs<-rbind(all_coefs,coefs) ## coefficients matrix keeps the hourly coefficients
+}
+all_coefs$hour=0:23
+
+
+yedek<-new_test_results_glm
+new_test_results_glm<-new_test_results_glm%>%arrange(Tarih,Saat)
+new_test_results_glm<-new_test_results_glm[,-(6:53)]
+mape_glm<-mape(new_test_results_glm,new_test_results_glm$`Tüketim Miktarı (MWh)`,(new_test_results_glm$glm_predict_hourly))
+summary(mape_glm)
+rowSums(all_coefs!=0)-2 #return number of columns having non zero coefficient so important in model
+###Comment-> depending on hour 18-24 columns are being used in the model among 48.
+#Part-f
+methods<-c("naive_168","naive_48","liner_regression","hourly_linear_regression","lasso_regression")
+mape_values<-c(mape_168$.estimate,mape_48$.estimate,linear_mape$.estimate,mape_lm_hourly$.estimate,mape_glm$.estimate)
+mm<-data.frame(methods,mape_values)
+
+ggplot(mm, aes(x=methods, y=mape_values)) +   geom_boxplot()
+
+
+```
+
