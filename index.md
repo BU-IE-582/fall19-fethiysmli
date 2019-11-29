@@ -6,4 +6,6 @@
 
 [Here](/hmw_2.html) is the html output of Homework 2
 
+[Here](/hmw3.html) is the html output of Homework 2
+
 
