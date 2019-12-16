@@ -1,0 +1,321 @@
+---
+title: "IE-582-Hmw4"
+author: "Fethi Yılmazşamlı"
+date: "16 12 2019"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r}
+library(zoo)
+library(data.table)
+library(dplyr)
+setwd("Z:/codes/R-Scripts/hmw4")
+booking<-fread("booking.csv")
+goals<-fread("goals.csv")
+matches<-fread("matches.csv")
+stat<-fread("matchstats.csv")
+
+
+
+
+
+percentage_to_number_converter<-function(x){
+  x<-gsub("%.*","",x)
+  return(as.numeric(as.character(x)))
+}
+matches$home_team_point=1
+matches$away_team_point=1
+matches[matches$match_hometeam_score>matches$match_awayteam_score,"home_team_point"]=3
+matches[matches$match_hometeam_score>matches$match_awayteam_score,"away_team_point"]=0
+matches[matches$match_hometeam_score<matches$match_awayteam_score,"away_team_point"]=3
+matches[matches$match_hometeam_scor<matches$match_awayteam_score,"home_team_point"]=0
+
+
+match_past_info<-function(ma_id){
+  
+temp<-subset(matches,matches$match_id==ma_id)
+
+home_matches<-subset(matches,matches$match_hometeam_id==temp$match_hometeam_id&temp$epoch>matches$epoch)
+away_matches<-subset(matches,matches$match_awayteam_id==temp$match_awayteam_id&temp$epoch>matches$epoch)
+
+
+
+home_matches<-home_matches%>%arrange(desc(epoch))%>%head(5)
+away_matches<-away_matches%>%arrange(desc(epoch))%>%head(5)
+
+
+home_sum_stats<-stat%>%filter(match_id%in%home_matches$match_id)%>%summarise(home_attigi_GoalAttempts=mean(home_GoalAttempts),
+                                                                              home_attigi_ShotsonGoal=mean(home_ShotsonGoal),
+                                                                              home_attigi_possession=mean(percentage_to_number_converter(home_BallPossession))/100,
+                                                                              home_yedigi_GoalAttempts=mean(away_GoalAttempts),
+                                                                              home_yedigi_ShotsonGoal=mean(away_ShotsonGoal),
+                                                                              home_keeper_rate=sum(home_GoalkeeperSaves)/sum(away_ShotsonGoal)
+)
+ 
+
+away_sum_stats<-stat%>%filter(match_id%in%away_matches$match_id)%>%summarise(away_attigi_GoalAttempts=mean(away_GoalAttempts),
+                                                                              away_attigi_ShotsonGoal=mean(away_ShotsonGoal),
+                                                                              away_attigi_possession=mean(percentage_to_number_converter(away_BallPossession))/100,
+                                                                              away_yedigi_GoalAttempts=mean(home_GoalAttempts),
+                                                                              away_yedigi_ShotsonGoal=mean(home_ShotsonGoal),
+                                                                              away_keeper_rate=sum(away_GoalkeeperSaves)/sum(home_ShotsonGoal)
+)  
+
+home_points_stats<-matches%>%filter(match_id%in%home_matches$match_id)%>%summarise(home_avarage_point=mean(home_team_point),home_avarage_score=mean(match_hometeam_score))
+away_points_stats<-matches%>%filter(match_id%in%away_matches$match_id)%>%summarise(away_avarage_point=mean(away_team_point),away_avarage_score=mean(match_awayteam_score))
+
+
+result<-data.frame(matrix(ncol=1))                                                                              
+result[,1]=ma_id
+result[,2:7]=home_sum_stats
+result[,8:13]=away_sum_stats
+result[,14:15]=home_points_stats
+result[,16:17]=away_points_stats
+names(result)[1]="match_id"
+
+result<-na.omit(result) #na's reduced
+return(result)
+
+} ## Features are selected, last 5 games taken into consideration
+
+
+set<-lapply(unique(matches$match_id),match_past_info)
+set1<-bind_rows(set)
+matches$total_goals=matches$match_hometeam_score+matches$match_awayteam_score
+matches$isLimit=0
+matches[total_goals>2.5,"isLimit"]=1
+tt<-merge(set1,matches%>%select(match_id,total_goals,isLimit),by="match_id") #data turned into tabular form
+tt<-na.omit(tt) 
+
+
+library(glmnet)
+library(MLmetrics)
+train<-sample_n(tt,floor(nrow(tt)*0.67))   
+test<-subset(tt,!tt$match_id%in%train$match_id)
+
+#lasso regression
+#total_goals
+set.seed(99)
+matrix=as.matrix(train[,2:17])
+result<-matrix(train[,18])
+glm_fit<-cv.glmnet(matrix,result) # cross-validated lasso
+plot(glm_fit)
+glm_predict<-predict(glm_fit, as.matrix(test[,2:17]), s = glm_fit$lambda.1se)  # make predictions
+lasso_test_error_total_goal=MSE(glm_predict,test$total_goals)
+
+glm_predict<-predict(glm_fit, as.matrix(train[,2:17]), s = glm_fit$lambda.1se)  # make predictions
+lasso_train_error_total_goal=MSE(glm_predict,train$total_goals)
+
+#ALT/UST
+matrix=as.matrix(train[,2:17])
+result<-matrix(train[,19])
+glm_fit<-cv.glmnet(matrix,result,family ="binomial") # cross-validated lasso
+glm_predict<-predict(glm_fit, as.matrix(test[,2:17]), s = glm_fit$lambda.1se)  # make predictions
+glm_predict[glm_predict>0]=1
+glm_predict[glm_predict<=0]=0
+
+lasso_test_error_altust=MSE(glm_predict,test$isLimit)
+
+glm_predict<-predict(glm_fit, as.matrix(train[,2:17]), s = glm_fit$lambda.1se)  # make predictions
+glm_predict[glm_predict>0]=1
+glm_predict[glm_predict<=0]=0
+
+lasso_train_error_altust=MSE(glm_predict,train$isLimit)
+
+
+
+
+#decision tree
+
+library(rpart)
+library(ISLR)
+library(tree)
+library(rpart.plot)
+#Toplam Gol
+tree_train=train[,-c(1,19)]
+tree_test=test[,c(1:19)]
+tree_test=test[,-c(1,19)]
+
+set.seed(sample(1:100,1))
+dt<-rpart(total_goals~.,tree_train,cp=0.001,method="anova")
+aa<-data.frame(printcp(dt))
+dt<-rpart(total_goals~.,tree_train,cp=aa[aa$xerror==min(aa$xerror),"CP"])
+rpart.plot(dt, extra = 100)
+pred<-predict(dt,tree_test)
+tree_test_error_total_goal=MSE(test$total_goals,pred)
+
+pred_train<-predict(dt,tree_train)
+tree_train_error_total_goal=MSE(train$total_goals,pred_train)
+
+#Üst Alt
+
+tree_train=train[,-c(1,18)]
+tree_test=test[,c(1:19)]
+tree_test=test[,-c(1,18)]
+
+set.seed(sample(1:100,1))
+dt<-rpart(isLimit~.,tree_train,cp=0.0001,method="class")
+aa<-data.frame(printcp(dt))
+dt<-rpart(isLimit~.,tree_train,cp=aa[aa$xerror==min(aa$xerror),"CP"])
+rpart.plot(dt, extra = 100)
+pred<-predict(dt,tree_test)
+pred[pred>0.5]=1
+pred[pred<=0.5]=0
+tree_test_error_altust=MSE(test$isLimit,pred)
+
+
+pred_train<-predict(dt,tree_test)
+pred_train[pred_train>0.5]=1
+pred_train[pred_train<=0.5]=0
+tree_train_error_altust=MSE(train$isLimit,pred)
+
+
+##random_forest
+
+#Toplam Gol
+
+set.seed(sample(1:100,1))
+library(randomForest)
+tree_train=train[,-c(1,19)]
+tree_test=test[,c(1:19)]
+tree_test=test[,-c(1,19)]
+Rf=randomForest(total_goals~.,tree_train,nodesize=5,ntree=500,type="regression")
+train.err=c()
+for(i in 1:6){
+  Rf=randomForest(total_goals~.,tree_train,nodesize=5,ntree=500,mtry=i)
+  train.err[i]= mean((Rf$predicted-tree_train$total_goals)^2)
+
+}
+
+errors<-as.data.frame(matrix(c(1:6,train.err),ncol=2))
+min_error=min(errors$V2)
+mtry=unlist(errors%>%filter(V2==min_error)%>%select(V1))
+Rf_last=randomForest(total_goals~.,tree_train,nodesize=5,ntree=500,mtry=mtry)
+pred<-predict(Rf_last,tree_test)
+rf_test_error_total_goal=MSE(pred,tree_test$total_goals)
+
+rf_train_error_total_goal=MSE(Rf_last$predicted,tree_train$total_goals)
+
+
+
+
+#alt üst
+tree_train=train[,-c(1,18)]
+tree_test=test[,c(1:19)]
+tree_test=tree_test[,-c(1,18)]
+tree_train$isLimit<-as.factor(tree_train$isLimit)
+tree_test$isLimit<-as.factor(tree_test$isLimit)
+Rf=randomForest(isLimit~.,tree_train,nodesize=1,ntree=500,type="classification")
+train.err=c()
+for(i in 1:6){
+  Rf=randomForest(isLimit~.,tree_train,nodesize=1,ntree=500,mtry=i,type="classification")
+
+  train.err[i]= MSE(as.numeric(Rf$predicted),as.numeric(tree_train$isLimit))
+  
+}
+errors<-as.data.frame(matrix(c(1:6,train.err),ncol=2))
+min_error=min(errors$V2)
+mtry=unlist(errors%>%filter(V2==min_error)%>%select(V1))
+Rf_last=randomForest(isLimit~.,tree_train,nodesize=1,ntree=500,mtry=mtry,type="classification")
+pred<-predict(Rf_last,tree_test)
+pred<-as.numeric(pred)
+rf_test_error_altust=MSE(as.numeric(pred),(as.numeric(tree_test$isLimit)))
+
+pred_train<-predict(Rf_last,tree_train)
+rf_train_error_altust=MSE(as.numeric(pred_train),(as.numeric(tree_train$isLimit)))
+
+
+
+##### GradientBoost
+
+library(gbm)
+#Toplam Gol
+
+tree_train=train[,-c(1,19)]
+tree_test=test[,c(1:19)]
+tree_test=test[,-c(1,19)]
+
+gbm_fit=gbm(total_goals~.,data=tree_train,cv.folds = 10,n.minobsinnode = 10)
+min=min(gbm_fit$train.error)
+shrinkage=0.1
+depth=1
+for(i in 1:3){
+  for(j in 1:5){
+    gbm_fit_temp=gbm(total_goals~.,data=tree_train,cv.folds = 10,n.minobsinnode = 10,shrinkage =i/10,interaction.depth = j )
+    if(min(gbm_fit$train.error)<=min){
+      shrinkage=i/10
+      depth=j
+      ntrees=gbm.perf(gbm_fit, method = "cv")
+      min=min(gbm_fit_temp$train.error)
+  }
+}
+} #best_parameter settings found
+
+gbm_fit_best=gbm(total_goals~.,data=tree_train,cv.folds = 10,n.minobsinnode = 10,shrinkage = shrinkage
+          , interaction.depth = depth,n.trees = ntrees)
+pred<-predict(gbm_fit_best,tree_test)
+gbm_test_error_total_goal=MSE(pred,tree_test$total_goals)
+
+pred_train<-predict(gbm_fit_best,tree_train)
+gbm_train_error_total_goal=MSE(pred_train,tree_train$total_goals)
+
+
+
+#Alt Üst
+tree_train=train[,-c(1,18)]
+tree_test=test[,c(1:19)]
+tree_test=test[,-c(1,18)]
+
+gbm_fit=gbm(isLimit~.,data=tree_train,cv.folds = 10,n.minobsinnode = 10,distribution = "bernoulli")
+min=min(gbm_fit$train.error)
+shrinkage=0.1
+depth=1
+for(i in 1:3){
+  for(j in 1:5){
+    gbm_fit_temp=gbm(isLimit~.,data=tree_train,distribution = "bernoulli",cv.folds = 10,n.minobsinnode = 10,shrinkage =i/10,interaction.depth = j )
+    if(min(gbm_fit$train.error)<=min){
+      shrinkage=i/10
+      depth=j
+      ntrees=gbm.perf(gbm_fit, method = "cv")
+      min=min(gbm_fit_temp$train.error)
+    }
+  }
+} #best_parameter settings found
+gbm_fit_best=gbm(isLimit~.,data=tree_train,cv.folds = 10,n.minobsinnode = 10,distribution = "bernoulli",shrinkage = shrinkage
+                 , interaction.depth = depth,n.trees = ntrees)
+pred<-predict(gbm_fit_best,tree_test)
+pred[pred>0.5]=1
+pred[pred<=0.5]=0
+gbm_test_error_altust=MSE(pred,tree_test$isLimit)
+
+
+pred_train<-predict(gbm_fit_best,tree_train)
+pred_train[pred_train>0.5]=1
+pred_train[pred_train<=0.5]=0
+gbm_train_error_altust=MSE(pred_train,tree_test$isLimit)
+
+
+test_errors_altust<-c(lasso_test_error_altust,tree_test_error_altust,rf_test_error_altust,gbm_test_error_altust)
+train_errors_altust<-c(lasso_train_error_altust,tree_train_error_altust,rf_train_error_altust,gbm_train_error_altust)
+
+test_errors_total_goal<-c(lasso_test_error_total_goal,tree_test_error_total_goal,rf_test_error_total_goal,gbm_test_error_total_goal)
+train_errors_total_goal<-c(lasso_train_error_total_goal,tree_train_error_total_goal,rf_train_error_total_goal,gbm_train_error_total_goal)
+
+altust=as.data.frame(matrix(c(test_errors_altust,train_errors_altust),ncol=2))
+names(altust)=c("test_error","train_error")
+row.names(altust)=c("lasso","tree","rf","gbm")
+altust
+#Comment: Overall lasso performs better, rf seems to be overfitted
+
+
+totalgoal=as.data.frame(matrix(c(test_errors_total_goal,train_errors_total_goal),ncol=2))
+names(totalgoal)=c("test_error","train_error")
+row.names(totalgoal)=c("lasso","tree","rf","gbm")
+totalgoal
+#Comment: Overall gbm performs better,but numbers seem close.
+
+
+```
+
